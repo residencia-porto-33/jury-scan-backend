@@ -9,7 +9,7 @@ import math
 
 from pydantic import BaseModel, field_validator
 
-from app.schemas.common import NAO_IDENTIFICADO, RiscoAgregado, Severidade
+from app.schemas.common import NAO_IDENTIFICADO, Severidade
 
 
 class AIDocumentSummary(BaseModel):
@@ -63,9 +63,35 @@ class AIIssue(BaseModel):
         return v
 
 
+class AIVinculo(BaseModel):
+    """Vínculo extraído pela IA. Datas copiadas do documento ("" quando não constam)."""
+
+    empregador: str
+    data_inicio: str
+    data_fim: str
+    trecho: str
+
+    @field_validator("empregador", "data_inicio", "data_fim", "trecho")
+    @classmethod
+    def strip_text(cls, v: str) -> str:
+        return v.strip()
+
+
+class AIBeneficio(BaseModel):
+    especie: str
+    dib: str
+    dcb: str
+    trecho: str
+
+    @field_validator("especie", "dib", "dcb", "trecho")
+    @classmethod
+    def strip_text(cls, v: str) -> str:
+        return v.strip()
+
+
 class AIOutput(BaseModel):
     documento_parece_cnis: bool
     resumo_documental: AIDocumentSummary
-    risco_agregado: RiscoAgregado
-    acoes_prioritarias: list[str]
+    vinculos_extraidos: list[AIVinculo]
+    beneficios_extraidos: list[AIBeneficio]
     achados: list[AIIssue]

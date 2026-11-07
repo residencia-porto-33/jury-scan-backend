@@ -9,7 +9,7 @@ API em **FastAPI** que recebe o texto de um extrato do **CNIS** (Cadastro Nacion
 1. O frontend extrai o texto do PDF no navegador (o PDF nunca chega ao backend) ou recebe o texto colado, e envia só o texto para `POST /api/analyze`.
 2. A API valida a entrada e registra a requisição no banco.
 3. O Gemini devolve uma análise estruturada (JSON), validada contra um contrato Pydantic.
-4. O backend descarta achados cuja evidência não existe no texto, ordena por severidade, gera os identificadores `CNIS-001…` e recalcula os totais.
+4. O backend descarta achados cuja evidência não existe no texto, aplica regras determinísticas (coincidência de vínculos, benefício por incapacidade dentro de vínculo, instruções embutidas no documento), ordena por severidade, gera os identificadores `CNIS-001…`, deriva o risco e as ações prioritárias dos achados validados e recalcula os totais.
 5. O resultado é gravado e devolvido. Se o documento não parece um CNIS, a resposta traz apenas uma pendência documental.
 
 ## Pré-requisitos
@@ -92,6 +92,20 @@ Use **apenas documentos fictícios ou anonimizados**. Nunca cole um CNIS real.
 
 Para consultar uma análise já feita, use `GET /api/analyze/{analysis_request_id}` com o `analysis_request_id` devolvido no POST.
 
+## Regras determinísticas (prompt v2)
+
+A IA **extrai** vínculos e benefícios e sugere achados. O que precisa ser consistente é calculado em Python, depois de conferir cada trecho e cada data contra o texto original:
+
+| Regra | Resultado |
+|---|---|
+| Vínculos com períodos coincidentes | Achado `baixa` (ambos com data de fim) ou `media` (algum sem data de fim). |
+| Benefício por incapacidade coincidindo com um vínculo | Achado `media` (categoria `beneficio`). |
+| Instrução embutida no documento (ex.: "ignore as instruções anteriores") | Achado `media` (categoria `outros`). A análise não segue a instrução. |
+| Risco agregado | `alto` se houver achado `alta`; `medio` se houver `media`; senão `baixo`. |
+| Ações prioritárias | Derivadas dos achados `alta`/`media` (formato `CNIS-00X: sugestão`), então toda ação aponta para um achado com evidência. |
+
+Datas ou trechos que a IA extrair e que não existirem no texto são ignorados. A versão do prompt (`prompt_version`) vai em toda resposta.
+
 ## Endpoints
 
 | Método | Rota | Descrição |
@@ -152,6 +166,7 @@ uvicorn app.main:app --reload
 | `GEMINI_MODEL` | ver `.env.example` | Modelo do Gemini. Confira a lista da sua chave (passo 3). |
 | `AI_TIMEOUT_SECONDS` | `60` | Timeout da chamada à IA. |
 | `AI_MAX_RETRIES` | `1` | Tentativas extras em timeout, 5xx ou resposta inválida. |
+| `AI_TEMPERATURE` | *(vazio)* | Temperatura da IA. Vazio usa o padrão do modelo (o Google recomenda manter o padrão nos modelos Gemini 3). |
 | `MIN_TEXT_CHARS` / `MAX_TEXT_CHARS` | `100` / `200000` | Limites do texto de entrada. |
 | `RATE_LIMIT_PER_MINUTE` | `5` | Requisições por minuto por cliente em `POST /api/analyze`. |
 | `STORE_INPUT_TEXT` | `false` | Se `true`, grava o texto integral do CNIS no banco (contém dados pessoais). |
@@ -178,6 +193,31 @@ tests/
 
 Para trocar de provedor de IA, implemente `AIProvider` (`app/services/ai/base.py`) e ajuste `build_ai_provider` em `app/services/ai/__init__.py`.
 
+## Solução de problemas
+
+| Sintoma | Causa e solução |
+|---|---|
+| `env file ... .env not found` | Falta criar o `.env` (passo 2). |
+| `Bind for 0.0.0.0:5432 failed: port is already allocated` | Outro Postgres usa a porta. Use `"5433:5432"` no serviço `db` do `docker-compose.yml` (e confira que o serviço `api` publica `"8000:8000"`). Depois: `docker compose down` e `docker compose up --build`. |
+| `Could not connect to server` em `localhost:8000` | Confira com `docker compose ps` se o `api` está `Up` com `0.0.0.0:8000->8000/tcp`. No Windows, teste também `http://127.0.0.1:8000/health`. |
+| Mudei o `.env` e nada mudou | O container só lê o `.env` ao ser criado: `docker compose up -d --force-recreate api`. |
+| `401` | `X-API-Key` ausente ou diferente de `API_KEYS`. No Swagger, use **Authorize**. |
+| `429` | Limite por minuto atingido. Aguarde e tente de novo. |
+| `503` `ia_indisponivel` | `GEMINI_API_KEY` vazia, ou cota do Gemini esgotada. |
+| `502` `ia_erro` | O Gemini recusou a chamada. Veja `docker compose logs api --tail 30` e procure `ai_api_error code=...`: **404** = modelo inexistente ou descontinuado (ajuste `GEMINI_MODEL`); **400/403** = chave inválida ou sem permissão. |
+| `502` `ia_resposta_invalida` | A IA respondeu fora do contrato. Tente de novo. Se persistir, ajuste o prompt (`app/services/ai/prompts.py`). |
+| Começar com o banco limpo | `docker compose down -v` apaga o volume do Postgres **e todos os dados**. |
+
+Logs da API: `docker compose logs -f api`. Eles registram só códigos e identificadores, nunca o texto do CNIS.
+
+## Segurança e privacidade
+
+- **Nunca versione o `.env`.** Ele contém a chave do Gemini e a `API_KEYS`. Só o `.env.example` (sem valores reais) vai para o Git.
+- **Use apenas dados fictícios ou anonimizados** em testes, exemplos e capturas de tela. CNIS reais têm CPF, NIT e histórico de vínculos.
+- **Camada gratuita do Gemini:** confira nos termos do Google como os dados enviados são tratados. Há relatos de que o conteúdo pode ser usado para melhorar os produtos deles. Por isso, só envie documentos anonimizados.
+- O **texto integral do CNIS não é gravado** por padrão (`STORE_INPUT_TEXT=false`). O resumo documental (CPF, NIT) é gravado; defina retenção e descarte conforme a LGPD antes de qualquer uso real.
+- A senha do Postgres no `docker-compose.yml` é só para desenvolvimento local. Em qualquer ambiente publicado, use credenciais próprias, guardadas nas variáveis de ambiente da plataforma.
+- Uma `X-API-Key` embutida em um frontend fica visível a quem abrir o navegador. No MVP ela só contém abuso casual. Autenticação por usuário é o próximo passo.
 
 ## Limitações do MVP
 

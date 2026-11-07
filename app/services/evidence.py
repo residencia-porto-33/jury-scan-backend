@@ -24,3 +24,14 @@ def evidence_in_text(evidencia: str, normalized_source: str) -> bool:
     if not fragments or sum(len(f) for f in fragments) < MIN_EVIDENCE_CHARS:
         return False
     return all(f in normalized_source for f in fragments)
+
+
+def shorten(text: str, limit: int = 200) -> str:
+    """Colapsa espaços e corta em palavra inteira, acrescentando reticências."""
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    if len(collapsed) <= limit:
+        return collapsed
+    cut = collapsed[:limit]
+    if collapsed[limit] != " " and " " in cut:
+        cut = cut[: cut.rfind(" ")]
+    return cut.rstrip(" ,;:.-") + "…"

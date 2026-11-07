@@ -1,4 +1,4 @@
-from app.services.evidence import evidence_in_text, normalize
+from app.services.evidence import evidence_in_text, normalize, shorten
 from app.services.severity import count_by_severity
 
 SOURCE = normalize("Seq. 1  Empregador: EMPRESA EXEMPLO LTDA\nData Início: 01/02/2015  Data Fim: (vazio)")
@@ -32,3 +32,12 @@ def test_quotes_around_evidence_are_ignored():
 def test_count_by_severity_always_has_four_keys():
     assert count_by_severity([]) == {"alta": 0, "media": 0, "baixa": 0, "info": 0}
     assert count_by_severity(["alta", "alta", "info"]) == {"alta": 2, "media": 0, "baixa": 0, "info": 1}
+
+
+def test_shorten_cuts_at_word_boundary_and_adds_ellipsis():
+    text = "palavra " * 40
+    short = shorten(text, 50)
+    assert short.endswith("…") and len(short) <= 51
+    assert not short.rstrip("…").endswith("palav")  # não corta no meio da palavra
+    assert shorten("curto", 50) == "curto"
+    assert shorten("a  b\n c", 50) == "a b c"

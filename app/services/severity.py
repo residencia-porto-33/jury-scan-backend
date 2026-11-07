@@ -9,3 +9,13 @@ def count_by_severity(severities: Iterable[str]) -> dict[str, int]:
     for severity in severities:
         totals[severity] += 1
     return totals
+
+
+def risco_from_severities(severities: Iterable[str]) -> str:
+    """Risco agregado derivado dos achados validados: alta -> alto, media -> medio, senão baixo."""
+    found = set(severities)
+    if "alta" in found:
+        return "alto"
+    if "media" in found:
+        return "medio"
+    return "baixo"

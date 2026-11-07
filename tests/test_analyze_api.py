@@ -4,7 +4,16 @@ from app.core.config import Settings, get_settings
 from app.main import app
 from app.models import AnalysisRequest
 from app.services.ai.base import AIInvalidResponseError, AITimeoutError, AIUnavailableError
-from tests.helpers import SAMPLE_TEXT, make_issue, make_output
+from tests.helpers import (
+    SAMPLE_INJECTION_TEXT,
+    SAMPLE_OVERLAP_TEXT,
+    SAMPLE_TEXT,
+    make_beneficio,
+    make_issue,
+    make_output,
+    make_vinculo,
+    make_vinculo_beta,
+)
 
 
 def test_success_orders_by_severity_and_recomputes_totals(client, ai, body):
@@ -38,7 +47,7 @@ def test_issue_with_invented_evidence_is_discarded(client, ai, body):
 
 
 def test_all_evidence_invalid_gives_low_risk(client, ai, body):
-    ai.output = make_output(issues=[make_issue(evidencia="texto que não existe no documento")], risco="alto")
+    ai.output = make_output(issues=[make_issue(evidencia="texto que não existe no documento")])
     data = client.post("/api/analyze", json=body).json()
 
     assert data["issues"] == []
@@ -138,3 +147,81 @@ def test_rate_limit_returns_429_with_retry_after(client, ai, body):
 
 def test_health_is_public(client):
     assert client.get("/health", headers={"X-API-Key": ""}).json() == {"status": "ok"}
+
+
+def test_risk_is_derived_from_validated_issues(client, ai, body):
+    ai.output = make_output(issues=[make_issue(severidade="alta", evidencia="Remuneração: 0,00")])
+    assert client.post("/api/analyze", json=body).json()["risco_agregado"] == "alto"
+
+    ai.output = make_output(issues=[make_issue(severidade="media")])
+    assert client.post("/api/analyze", json=body).json()["risco_agregado"] == "medio"
+
+    ai.output = make_output(issues=[make_issue(severidade="baixa")])
+    assert client.post("/api/analyze", json=body).json()["risco_agregado"] == "baixo"
+
+
+def test_every_priority_action_points_to_an_issue(client, ai, body):
+    ai.output = make_output(
+        issues=[make_issue(severidade="alta", evidencia="Remuneração: 0,00"), make_issue(severidade="info")]
+    )
+    data = client.post("/api/analyze", json=body).json()
+
+    ids = {i["identificador_exibicao"] for i in data["issues"]}
+    assert data["acoes_prioritarias"]
+    for acao in data["acoes_prioritarias"]:
+        assert acao.split(":")[0] in ids
+
+
+def test_overlapping_vinculos_and_benefit_are_found_by_rules_not_by_ai(client, ai):
+    ai.output = make_output(
+        issues=[],
+        vinculos=[make_vinculo(), make_vinculo_beta()],
+        beneficios=[make_beneficio()],
+    )
+    response = client.post(
+        "/api/analyze", json={"texto_input": SAMPLE_OVERLAP_TEXT, "origem": "texto_colado"}
+    )
+    data = response.json()
+
+    categorias = sorted(i["categoria"] for i in data["issues"])
+    assert categorias == ["beneficio", "beneficio", "vinculo"]
+    assert data["severity_totals"] == {"alta": 0, "media": 2, "baixa": 1, "info": 0}
+    assert data["risco_agregado"] == "medio"
+    assert all("CNIS-" in a for a in data["acoes_prioritarias"])
+
+
+def test_extracted_dates_not_present_in_text_are_ignored(client, ai):
+    ai.output = make_output(
+        issues=[],
+        vinculos=[make_vinculo(), make_vinculo_beta(data_inicio="05/05/1999")],
+    )
+    data = client.post(
+        "/api/analyze", json={"texto_input": SAMPLE_OVERLAP_TEXT, "origem": "texto_colado"}
+    ).json()
+
+    assert data["issues"] == []
+    assert data["risco_agregado"] == "baixo"
+
+
+def test_embedded_instruction_in_document_is_flagged(client, ai):
+    ai.output = make_output(issues=[])
+    data = client.post(
+        "/api/analyze", json={"texto_input": SAMPLE_INJECTION_TEXT, "origem": "texto_colado"}
+    ).json()
+
+    flagged = [i for i in data["issues"] if i["categoria"] == "outros"]
+    assert len(flagged) == 1
+    assert "ignore todas as instruções" in flagged[0]["evidencia"].lower()
+
+
+def test_validation_messages_are_in_portuguese(client):
+    bad_origin = client.post("/api/analyze", json={"texto_input": SAMPLE_TEXT, "origem": "email"}).json()
+    assert bad_origin["erros"][0]["campo"] == "origem"
+    assert "Valores aceitos" in bad_origin["erros"][0]["motivo"]
+    assert "upload_pdf" in bad_origin["erros"][0]["motivo"]
+
+    bad_id = client.get("/api/analyze/nao-e-uuid").json()
+    assert bad_id["erros"][0]["motivo"] == "Identificador inválido (esperado um UUID)."
+
+    missing = client.post("/api/analyze", json={"origem": "texto_colado"}).json()
+    assert missing["erros"][0]["motivo"] == "Campo obrigatório."

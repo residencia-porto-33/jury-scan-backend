@@ -24,6 +24,31 @@ class AppError(Exception):
         self.headers = headers
 
 
+_MOTIVOS = {
+    "missing": "Campo obrigatório.",
+    "string_type": "Deve ser um texto.",
+    "json_invalid": "O corpo da requisição não é um JSON válido.",
+    "model_attributes_type": "O corpo da requisição deve ser um objeto JSON.",
+    "uuid_parsing": "Identificador inválido (esperado um UUID).",
+}
+
+
+def _motivo(err: dict) -> str:
+    tipo = str(err.get("type", ""))
+    if tipo in ("literal_error", "enum"):
+        esperado = str((err.get("ctx") or {}).get("expected", "")).replace(" or ", " ou ")
+        return f"Valor inválido. Valores aceitos: {esperado}." if esperado else "Valor inválido."
+    if tipo in _MOTIVOS:
+        return _MOTIVOS[tipo]
+    return str(err.get("msg", "valor inválido")).removeprefix("Value error, ")
+
+
+def _campo(err: dict) -> str:
+    if err.get("type") in ("json_invalid", "model_attributes_type"):
+        return "corpo"
+    return ".".join(str(p) for p in err.get("loc", ()) if p != "body")
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def handle_app_error(_: Request, exc: AppError) -> JSONResponse:
@@ -36,13 +61,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
         # Nunca devolve o "input" do erro: ele conteria o texto do CNIS (dados pessoais).
-        erros = [
-            {
-                "campo": ".".join(str(p) for p in err.get("loc", ()) if p != "body"),
-                "motivo": str(err.get("msg", "valor inválido")).removeprefix("Value error, "),
-            }
-            for err in exc.errors()
-        ]
+        erros = [{"campo": _campo(err), "motivo": _motivo(err)} for err in exc.errors()]
         return JSONResponse(
             status_code=400,
             content={

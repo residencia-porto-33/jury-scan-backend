@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.8-flash"
     ai_timeout_seconds: float = 60.0
     ai_max_retries: int = 1
+    ai_temperature: float | None = None  # vazio = padrão do modelo
 
     min_text_chars: int = 100
     max_text_chars: int = 200_000

@@ -25,6 +25,8 @@ class GeminiProvider:
     def __init__(self, settings: Settings) -> None:
         self._model = settings.gemini_model
         self._max_retries = max(0, settings.ai_max_retries)
+        # Para os modelos Gemini 3, o Google recomenda manter a temperatura padrão (1.0).
+        self._temperature = settings.ai_temperature
         self._client = genai.Client(
             api_key=settings.gemini_api_key,
             http_options=types.HttpOptions(timeout=int(settings.ai_timeout_seconds * 1000)),
@@ -43,16 +45,18 @@ class GeminiProvider:
                 time.sleep(min(2**attempt, 5))
 
     def _call_once(self, texto: str) -> AIResult:
+        config_args: dict = {
+            "system_instruction": SYSTEM_PROMPT,
+            "response_mime_type": "application/json",
+            "response_schema": AIOutput,
+        }
+        if self._temperature is not None:
+            config_args["temperature"] = self._temperature
         try:
             response = self._client.models.generate_content(
                 model=self._model,
                 contents=build_user_prompt(texto),
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    response_mime_type="application/json",
-                    response_schema=AIOutput,
-                    temperature=0.1,
-                ),
+                config=types.GenerateContentConfig(**config_args),
             )
         except httpx.TimeoutException as exc:
             raise AITimeoutError("timeout") from exc
