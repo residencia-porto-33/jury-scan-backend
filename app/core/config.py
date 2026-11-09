@@ -13,10 +13,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://juryscan:juryscan@localhost:5432/juryscan"
 
     api_keys: str = ""
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
 
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.8-flash"
+    gemini_model: str = "gemini-3.5-flash"
     ai_timeout_seconds: float = 60.0
     ai_max_retries: int = 1
     ai_temperature: float | None = None  # vazio = padrão do modelo
